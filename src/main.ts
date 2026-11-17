@@ -1,26 +1,27 @@
 import './style.css';
 import { TempoEngine, type TempoState } from './engine';
 import { openMic, type Mic } from './mic';
-import { Session, type Report, type Section, type TempoSample } from './session';
+import { Session, type Report, type TempoSample } from './session';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const meter = $('meter');
+const stage = $('stage');
 const statusEl = $('status');
+const eyebrowEl = $('eyebrow');
 const bpmEl = $('bpm');
 const deltaEl = $('delta');
-const hitEl = $('hit');
 const levelEl = $('level');
 const toggle = $<HTMLButtonElement>('toggle');
+const toggleLabel = $('toggle-label');
 const half = $<HTMLButtonElement>('half');
 const double = $<HTMLButtonElement>('double');
 const targetEl = $<HTMLInputElement>('target');
+const moreEl = $('more');
 const canvas = $<HTMLCanvasElement>('graph');
-const graphTitle = $('graph-title');
-const graphRange = $('graph-range');
+const dock = document.querySelector<HTMLElement>('.dock')!;
 const reportEl = $('report');
 
-/** 실시간 그래프에 보이는 길이(초) */
-const LIVE_SPAN = 60;
+/** 실시간 그래프에서 맨 위까지 보이는 길이(초) */
+const LIVE_SPAN = 40;
 /** 기준에서 이만큼(비율) 안이면 잘 맞는 것으로 본다 */
 const ON_TEMPO = 0.01;
 
@@ -32,6 +33,10 @@ let wakeLock: { release(): Promise<void> } | null = null;
 /** 지금 연주의 기준 템포 (목표가 없을 때 처음 4초에서 잡는다) */
 let baseline: number | null = null;
 let report: Report | null = null;
+/** 마지막 타격 시각(performance.now). 선의 머리에서 번지는 고리를 그린다 */
+let hitAt = -Infinity;
+/** 그래프 가로 폭이 나타내는 범위(기준 대비 비율). 값이 벗어나면 천천히 넓어진다 */
+let range = 0.08;
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const signed = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}`;
@@ -53,19 +58,21 @@ document.addEventListener('visibilitychange', () => {
 
 async function start() {
   toggle.disabled = true;
-  statusEl.textContent = '마이크를 켜는 중…';
+  statusEl.textContent = '마이크를 켜는 중';
   try {
     mic = await openMic(onSamples);
   } catch (e) {
     const denied = e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
     const missing = e instanceof DOMException && e.name === 'NotFoundError';
-    statusEl.textContent = denied
-      ? '마이크를 쓸 수 없어요. 브라우저에서 마이크 권한을 허용해 주세요'
+    statusEl.textContent = '마이크 꺼짐';
+    deltaEl.textContent = denied
+      ? '브라우저에서 마이크 권한을 허용해 주세요'
       : missing
         ? '마이크를 찾지 못했어요'
         : e instanceof Error && !(e instanceof DOMException)
           ? e.message
           : '마이크를 켜지 못했어요';
+    delete deltaEl.dataset.kind;
     toggle.disabled = false;
     return;
   }
@@ -74,10 +81,15 @@ async function start() {
   session.clear();
   baseline = null;
   report = null;
+  range = 0.08;
   reportEl.hidden = true;
-  graphTitle.textContent = '빠르기 흐름';
-  toggle.textContent = '결과 보기';
+  moreEl.hidden = true;
+  eyebrowEl.textContent = 'BPM';
+  stage.classList.add('running');
+  toggleLabel.textContent = '마침';
+  toggle.setAttribute('aria-label', '측정 마치고 결과 보기');
   toggle.disabled = false;
+  window.scrollTo({ top: 0 });
   void keepAwake();
   requestAnimationFrame(frame);
 }
@@ -88,14 +100,11 @@ function stop() {
   engine = null;
   void wakeLock?.release();
   wakeLock = null;
-  toggle.textContent = '다시 측정';
+  stage.classList.remove('running');
+  toggleLabel.textContent = '다시';
+  toggle.setAttribute('aria-label', '다시 측정');
   half.disabled = double.disabled = true;
-  meter.dataset.phase = 'off';
-  bpmEl.textContent = '--';
-  statusEl.textContent = '측정을 마쳤어요 · 아래에서 결과를 확인하세요';
   levelEl.style.width = '0';
-  deltaEl.innerHTML = '&nbsp;';
-  delete deltaEl.dataset.kind;
   showReport();
 }
 
@@ -111,12 +120,7 @@ async function keepAwake() {
 
 function onSamples(samples: Float32Array) {
   if (!engine) return;
-  const onsets = engine.push(samples);
-  if (onsets.length) {
-    hitEl.classList.remove('on');
-    void hitEl.offsetWidth;
-    hitEl.classList.add('on');
-  }
+  if (engine.push(samples).length) hitAt = performance.now();
   const s = engine.state();
   if (s.phase === 'locked' && s.bpm !== null) {
     const before = session.samples.length;
@@ -153,25 +157,36 @@ function frame() {
   if (!engine) return;
   const s = engine.state();
   renderMeter(s);
-  draw(s.time);
+  draw(s);
   requestAnimationFrame(frame);
 }
 
+/** 큰 숫자: 정수는 크게, 소수 첫째 자리는 작게 */
+function setNumber(bpm: number | null) {
+  bpmEl.classList.toggle('empty', bpm === null);
+  if (bpm === null) {
+    bpmEl.textContent = '—';
+    return;
+  }
+  const [whole, frac] = bpm.toFixed(1).split('.');
+  const small = document.createElement('small');
+  small.textContent = `.${frac}`;
+  bpmEl.replaceChildren(whole, small);
+}
+
 function renderMeter(s: TempoState) {
-  meter.dataset.phase = s.phase;
+  stage.dataset.phase = s.phase;
   const shown = s.bpm !== null && (s.phase === 'locked' || s.phase === 'hold');
-  bpmEl.textContent = shown ? s.bpm!.toFixed(1) : '--';
+  setNumber(shown ? s.bpm : null);
   half.disabled = double.disabled = !shown;
   levelEl.style.width = `${Math.min(100, Math.sqrt(engine!.level) * 100)}%`;
-  statusEl.textContent =
-    s.phase === 'locked' ? '듣는 중' : s.phase === 'hold' ? '잠깐 놓쳤어요 · 마지막으로 잰 빠르기' : s.phase === 'searching' ? '측정 중…' : '듣고 있어요 · 드럼을 쳐 보세요';
+  statusEl.textContent = s.phase === 'locked' ? '듣는 중' : s.phase === 'hold' ? '잠깐 놓침' : s.phase === 'searching' ? '측정 중' : '기다리는 중';
 
+  delete deltaEl.dataset.kind;
   if (!shown) {
-    deltaEl.innerHTML = '&nbsp;';
-    delete deltaEl.dataset.kind;
+    deltaEl.textContent = s.phase === 'searching' ? '박을 찾고 있어요' : '드럼을 쳐 보세요';
   } else if (baseline === null) {
-    deltaEl.textContent = '기준 템포 잡는 중';
-    delete deltaEl.dataset.kind;
+    deltaEl.textContent = '기준 템포를 잡는 중';
   } else {
     const off = s.bpm! - baseline;
     const kind = Math.abs(off) <= baseline * ON_TEMPO ? 'ok' : off > 0 ? 'fast' : 'slow';
@@ -183,18 +198,28 @@ function renderMeter(s: TempoState) {
 
 function showReport() {
   report = session.report(target);
-  reportEl.hidden = false;
-  graphTitle.textContent = '전체 흐름';
+  stage.dataset.phase = report ? 'locked' : 'off';
+  statusEl.textContent = '마침';
+  delete deltaEl.dataset.kind;
   const tiles = $('tiles');
   const takes = $('takes');
   tiles.replaceChildren();
   takes.replaceChildren();
   if (!report) {
-    $('report-time').textContent = '';
-    takes.append(el('p', 'muted', '빠르기를 5초 넘게 재지 못했어요. 마이크를 드럼 가까이 두고 일정한 박으로 조금 더 길게 쳐 보세요.'));
+    eyebrowEl.textContent = 'BPM';
+    setNumber(null);
+    deltaEl.textContent = '빠르기를 5초 넘게 재지 못했어요. 조금 더 길게 쳐 보세요';
+    reportEl.hidden = true;
+    moreEl.hidden = true;
     draw();
     return;
   }
+  eyebrowEl.textContent = '평균 BPM';
+  setNumber(report.mean);
+  deltaEl.textContent = `안정성 ${report.score}점 · 흔들림 ±${report.wobblePct.toFixed(1)}%`;
+  reportEl.hidden = false;
+  moreEl.hidden = false;
+
   $('report-time').textContent = `잰 시간 ${clock(report.measured)}`;
   const tile = (value: string, label: string) => {
     const d = el('div', 'tile');
@@ -204,7 +229,7 @@ function showReport() {
   tile(report.mean.toFixed(1), '평균 BPM');
   tile(`${report.min.toFixed(0)}–${report.max.toFixed(0)}`, '가장 느릴 때–빠를 때');
   tile(`±${report.wobblePct.toFixed(1)}%`, '빠르기 흔들림');
-  tile(`${report.score}점`, '안정성');
+  tile(`${report.score}`, '안정성 점수');
 
   report.takes.forEach((take, i) => {
     const box = el('div', 'take');
@@ -216,10 +241,11 @@ function showReport() {
         ? '처음과 끝의 빠르기가 거의 같아요'
         : `끝으로 갈수록 ${Math.abs(drift).toFixed(1)} BPM ${drift > 0 ? '빨라졌어요' : '느려졌어요'}`;
     box.append(el('p', '', `처음 ${take.startBpm.toFixed(1)} → 끝 ${take.endBpm.toFixed(1)} · ${trend}`));
+    const ref = `${target ? '목표' : '기준'} ${take.baseline.toFixed(1)} BPM`;
     if (!take.sections.length) {
-      box.append(el('p', 'tag ok', `${target ? '목표' : '기준'} ${take.baseline.toFixed(1)} BPM에서 크게 벗어난 구간이 없어요`));
+      box.append(el('p', 'tag ok', `${ref}에서 크게 벗어난 구간이 없어요`));
     } else {
-      box.append(el('p', 'muted', `${target ? '목표' : '기준'} ${take.baseline.toFixed(1)} BPM에서 벗어난 구간`));
+      box.append(el('p', '', `${ref}에서 벗어난 구간`));
       const ul = el('ul');
       for (const sec of take.sections) {
         const li = el('li');
@@ -241,12 +267,16 @@ function el(tag: string, cls = '', text = '') {
 }
 
 // ---- 그래프 ----
+// 시간은 세로(지금이 아래, 지난 것은 위로 흘러가며 흐려진다), 빠르기는 가로(가운데 = 기준, 오른쪽 = 빠름, 왼쪽 = 느림)
 
 const css = getComputedStyle(document.documentElement);
-const color = (name: string) => css.getPropertyValue(name).trim();
+const INK = css.getPropertyValue('--ink').trim();
+const FAST = css.getPropertyValue('--fast').trim();
+const SLOW = css.getPropertyValue('--slow').trim();
+const MUTED = css.getPropertyValue('--muted').trim();
 
-/** now가 있으면 최근 1분(실시간), 없으면 연습 전체 */
-function draw(now?: number) {
+/** 실시간이면 상태를 넘긴다. 없으면 연습 전체를 한 화면에 그린다 */
+function draw(live?: TempoState) {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
@@ -258,115 +288,173 @@ function draw(now?: number) {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
 
-  const live = now !== undefined && mic !== null;
   const all = session.samples;
-  let from: number;
-  let to: number;
+  const cx = w / 2;
+  // 지금 위치(선의 머리)는 아래 버튼들 바로 위. 그 밑에 눈금 숫자가 들어간다
+  const headY = dock.offsetTop - 40;
+  let y: (t: number) => number;
+  let pts: TempoSample[];
   if (live) {
-    to = Math.max(LIVE_SPAN, now);
-    from = to - LIVE_SPAN;
+    const pps = headY / LIVE_SPAN;
+    y = (t) => headY - (live.time - t) * pps;
+    pts = all.filter((s) => s.t >= live.time - LIVE_SPAN - 2);
   } else {
-    from = all.length ? all[0].t : 0;
-    to = all.length ? Math.max(all[all.length - 1].t, from + 10) : LIVE_SPAN;
-  }
-  const pts = all.filter((s) => s.t >= from - 1);
-  graphRange.textContent = live ? '최근 1분' : all.length ? `${clock(from)}–${clock(to)}` : '';
-
-  const padL = 34;
-  const padB = 18;
-  const top = 8;
-  const plotW = w - padL - 4;
-  const plotH = h - padB - top;
-  const x = (t: number) => padL + ((t - from) / (to - from)) * plotW;
-
-  // 세로 범위: 보이는 값들을 다 담되 너무 좁지 않게
-  const values = pts.map((p) => p.bpm);
-  const refs = live ? (baseline ? [baseline] : []) : (report?.takes.map((t) => t.baseline) ?? []);
-  const lo0 = Math.min(...values, ...refs);
-  const hi0 = Math.max(...values, ...refs);
-  const mid = values.length ? (lo0 + hi0) / 2 : (target ?? 100);
-  const spread = Math.max(values.length ? (hi0 - lo0) / 2 + 2 : 0, mid * 0.06, 5);
-  const lo = mid - spread;
-  const hi = mid + spread;
-  const y = (bpm: number) => top + (1 - (bpm - lo) / (hi - lo)) * plotH;
-
-  if (!values.length) {
-    g.fillStyle = color('--muted');
-    g.font = '13px system-ui, sans-serif';
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.fillText(live ? '빠르기를 재면 여기에 그려져요' : reportEl.hidden ? '측정을 시작하면 여기에 그려져요' : '아직 잰 빠르기가 없어요', padL + plotW / 2, top + plotH / 2);
-    return;
+    const from = all.length ? all[0].t : 0;
+    const to = all.length ? all[all.length - 1].t : 1;
+    const topY = h * 0.1;
+    y = (t) => topY + ((t - from) / Math.max(1, to - from)) * (headY - topY);
+    pts = report ? all : [];
   }
 
-  g.font = '11px system-ui, sans-serif';
-  g.textBaseline = 'middle';
-  g.lineWidth = 1;
-  const step = [1, 2, 5, 10, 20, 50].find((s) => (hi - lo) / s <= 5) ?? 50;
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
-    g.strokeStyle = color('--line');
-    g.beginPath();
-    g.moveTo(padL, y(v));
-    g.lineTo(w - 4, y(v));
-    g.stroke();
-    g.fillStyle = color('--muted');
-    g.textAlign = 'right';
-    g.fillText(String(v), padL - 6, y(v));
+  // 가운데(기준)와 가로 범위
+  const ref = live ? (baseline ?? pts[pts.length - 1]?.bpm ?? null) : (target ?? report?.mean ?? null);
+  if (ref !== null && pts.length) {
+    let far = 0;
+    for (const p of pts) far = Math.max(far, Math.abs(p.bpm / ref - 1));
+    const want = Math.max(0.08, far * 1.25);
+    range = live ? range + (want - range) * 0.06 : want;
   }
-  g.textAlign = 'center';
-  g.textBaseline = 'alphabetic';
-  const tick = [5, 10, 15, 30, 60, 120, 300, 600].find((s) => (to - from) / s <= 6) ?? 600;
-  for (let t = Math.ceil(from / tick) * tick; t <= to; t += tick) g.fillText(clock(t), Math.min(w - 16, Math.max(padL + 12, x(t))), h - 4);
+  const half = Math.min(w * 0.44, 420);
+  const x = (bpm: number) => (ref === null ? cx : cx + (bpm / ref - 1) / range * half);
 
-  g.save();
-  g.beginPath();
-  g.rect(padL, 0, plotW + 4, h - padB);
-  g.clip();
+  if (ref !== null && pts.length) {
+    // 벗어난 구간: 결과 화면에서만, 그 시간대를 가로 띠로
+    if (!live && report) {
+      for (const take of report.takes) {
+        for (const sec of take.sections) {
+          const band = g.createLinearGradient(0, 0, w, 0);
+          const c = sec.kind === 'fast' ? FAST : SLOW;
+          band.addColorStop(sec.kind === 'fast' ? 0.5 : 0, alpha(c, sec.kind === 'fast' ? 0 : 0.16));
+          band.addColorStop(sec.kind === 'fast' ? 1 : 0.5, alpha(c, sec.kind === 'fast' ? 0.16 : 0));
+          g.fillStyle = band;
+          g.fillRect(0, y(sec.start), w, Math.max(2, y(sec.end) - y(sec.start)));
+        }
+      }
+    }
 
-  // 기준선과 벗어난 구간
-  const refLine = (bpm: number, a: number, b: number) => {
-    g.strokeStyle = color('--muted');
-    g.setLineDash([4, 4]);
-    g.beginPath();
-    g.moveTo(x(a), y(bpm));
-    g.lineTo(x(b), y(bpm));
-    g.stroke();
-    g.setLineDash([]);
-  };
-  if (live) {
-    if (baseline) refLine(baseline, from, to);
-  } else if (report) {
-    for (const take of report.takes) {
-      for (const sec of take.sections) shade(g, sec, x, top, plotH);
-      refLine(take.baseline, take.start, take.end);
+    // 끊긴 곳에서 나눈 선들
+    const runs: TempoSample[][] = [];
+    for (const p of pts) {
+      const cur = runs[runs.length - 1];
+      if (cur && p.t - cur[cur.length - 1].t <= 1) cur.push(p);
+      else runs.push([p]);
+    }
+    const trace = (run: TempoSample[]) => {
+      g.moveTo(x(run[0].bpm), y(run[0].t));
+      for (let i = 1; i < run.length - 1; i++) {
+        const mx = (x(run[i].bpm) + x(run[i + 1].bpm)) / 2;
+        const my = (y(run[i].t) + y(run[i + 1].t)) / 2;
+        g.quadraticCurveTo(x(run[i].bpm), y(run[i].t), mx, my);
+      }
+      const last = run[run.length - 1];
+      g.lineTo(x(last.bpm), y(last.t));
+    };
+
+    // 기준선과 선 사이를 엷게 채운다: 오른쪽(빠름)은 따뜻하게, 왼쪽(느림)은 차갑게
+    const wash = g.createLinearGradient(cx - half, 0, cx + half, 0);
+    wash.addColorStop(0, alpha(SLOW, 0.34));
+    wash.addColorStop(0.5, alpha(INK, 0));
+    wash.addColorStop(1, alpha(FAST, 0.34));
+    g.fillStyle = wash;
+    for (const run of runs) {
+      if (run.length < 2) continue;
+      g.beginPath();
+      trace(run);
+      g.lineTo(cx, y(run[run.length - 1].t));
+      g.lineTo(cx, y(run[0].t));
+      g.closePath();
+      g.fill();
+    }
+
+    g.lineWidth = 1.6;
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    g.strokeStyle = INK;
+    g.shadowColor = alpha(INK, 0.55);
+    g.shadowBlur = 12;
+    for (const run of runs) {
+      if (run.length < 2) continue;
+      g.beginPath();
+      trace(run);
+      g.stroke();
+    }
+    g.shadowBlur = 0;
+
+    // 위로 갈수록 사라지게
+    if (live) {
+      const fade = g.createLinearGradient(0, 0, 0, headY);
+      fade.addColorStop(0, 'rgba(0,0,0,0)');
+      fade.addColorStop(0.12, 'rgba(0,0,0,0.12)');
+      fade.addColorStop(1, 'rgba(0,0,0,1)');
+      g.globalCompositeOperation = 'destination-in';
+      g.fillStyle = fade;
+      g.fillRect(0, 0, w, h);
+      g.globalCompositeOperation = 'source-over';
     }
   }
 
-  g.strokeStyle = color('--text');
-  g.lineWidth = 2;
-  g.lineJoin = 'round';
+  // 기준선(가운데)과 눈금
+  const axis = g.createLinearGradient(0, 0, 0, h);
+  axis.addColorStop(0, alpha(INK, 0));
+  axis.addColorStop(0.5, alpha(INK, 0.1));
+  axis.addColorStop(headY / h, alpha(INK, 0.22));
+  axis.addColorStop(Math.min(1, (headY + 10) / h), alpha(INK, 0));
+  g.strokeStyle = axis;
+  g.lineWidth = 1;
   g.beginPath();
-  let prev: TempoSample | null = null;
-  for (const p of pts) {
-    if (prev && p.t - prev.t <= 1) g.lineTo(x(p.t), y(p.bpm));
-    else g.moveTo(x(p.t), y(p.bpm));
-    prev = p;
-  }
+  g.moveTo(cx, 0);
+  g.lineTo(cx, h);
   g.stroke();
-  if (live && prev && now - prev.t < 1) {
-    g.fillStyle = color('--accent');
-    g.beginPath();
-    g.arc(x(prev.t), y(prev.bpm), 4, 0, Math.PI * 2);
-    g.fill();
+
+  if (ref !== null && pts.length) {
+    const span = ref * range;
+    const step = [1, 2, 5, 10, 20, 50].find((s) => span / s <= 2.2) ?? 50;
+    g.font = "400 10.5px 'Inter', system-ui, sans-serif";
+    g.textAlign = 'center';
+    g.textBaseline = 'top';
+    for (let k = -2; k <= 2; k++) {
+      const px = x(ref + k * step);
+      if (px < 14 || px > w - 14) continue;
+      g.fillStyle = alpha(k === 0 ? INK : MUTED, k === 0 ? 0.75 : 0.6);
+      g.fillText(k === 0 ? ref.toFixed(0) : `${k > 0 ? '+' : '−'}${Math.abs(k * step)}`, px, headY + 16);
+      if (k === 0) continue;
+      g.strokeStyle = alpha(INK, 0.1);
+      g.beginPath();
+      g.moveTo(px, headY + 4);
+      g.lineTo(px, headY + 11);
+      g.stroke();
+    }
+
+    // 지금 위치: 점과, 타격마다 번지는 고리
+    const last = pts[pts.length - 1];
+    if (live && live.time - last.t < 1) {
+      const hx = x(last.bpm);
+      const hy = y(last.t);
+      const off = baseline ? last.bpm / baseline - 1 : 0;
+      const tint = Math.abs(off) <= ON_TEMPO ? INK : off > 0 ? FAST : SLOW;
+      const age = (performance.now() - hitAt) / 450;
+      if (age >= 0 && age < 1) {
+        g.strokeStyle = alpha(tint, 0.5 * (1 - age));
+        g.lineWidth = 1;
+        g.beginPath();
+        g.arc(hx, hy, 5 + age * 20, 0, Math.PI * 2);
+        g.stroke();
+      }
+      g.fillStyle = tint;
+      g.shadowColor = tint;
+      g.shadowBlur = 16;
+      g.beginPath();
+      g.arc(hx, hy, 3.5, 0, Math.PI * 2);
+      g.fill();
+      g.shadowBlur = 0;
+    }
   }
-  g.restore();
 }
 
-function shade(g: CanvasRenderingContext2D, sec: Section, x: (t: number) => number, top: number, plotH: number) {
-  g.globalAlpha = 0.22;
-  g.fillStyle = color(sec.kind === 'fast' ? '--fast' : '--slow');
-  g.fillRect(x(sec.start), top, Math.max(2, x(sec.end) - x(sec.start)), plotH);
-  g.globalAlpha = 1;
+/** #rrggbb → rgba() */
+function alpha(hex: string, a: number) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 }
 
 draw();
