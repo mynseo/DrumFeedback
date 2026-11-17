@@ -17,6 +17,7 @@ const half = $<HTMLButtonElement>('half');
 const double = $<HTMLButtonElement>('double');
 const targetEl = $<HTMLInputElement>('target');
 const feelEl = $<HTMLSelectElement>('feel');
+const feelHint = $('feel-hint');
 const moreEl = $('more');
 const canvas = $<HTMLCanvasElement>('graph');
 const dock = document.querySelector<HTMLElement>('.dock')!;
@@ -59,6 +60,7 @@ try {
 }
 feelEl.addEventListener('change', () => {
   feel = feelEl.value in FEELS ? (feelEl.value as Feel) : null;
+  feelHint.hidden = feel !== null;
   engine?.setFeel(feel);
   try {
     if (feel) localStorage.setItem('feel', feel);
@@ -67,6 +69,7 @@ feelEl.addEventListener('change', () => {
     /* 저장 못 해도 이번에는 쓴다 */
   }
 });
+feelHint.hidden = feel !== null;
 targetEl.addEventListener('change', () => {
   const v = Number(targetEl.value);
   target = v >= 30 && v <= 300 ? v : null;
