@@ -25,6 +25,10 @@ const PRIOR_BPM = 105;
 const PRIOR_WIDTH = 1.0; // 옥타브
 const HINT_WIDTH = 0.3;
 const STEP = 1.01;
+/** 필인으로 보는 가장 긴 길이(초) */
+const FILL_SEC = 4;
+/** 이만큼 같은 빠르기로 읽은 뒤부터 필인을 버틴다. 그 전에는 처음에 잘못 잡은 박을 바로 고친다 */
+const SETTLED_SEC = 3;
 
 export interface TempoEstimate {
   bpm: number;
@@ -56,6 +60,10 @@ export class TempoTracker {
   last: number | null = null;
 
   private onsets: Onset[] = [];
+  private fasterSince: number | null = null;
+  /** 지금 빠르기(last)로 읽기 시작한 시각 */
+  private settledAt = Infinity;
+  private settledBpm = 0;
   private loudest = 0;
 
   get size() {
@@ -72,11 +80,17 @@ export class TempoTracker {
     this.onsets = [];
     this.last = null;
     this.loudest = 0;
+    this.fasterSince = null;
   }
 
   estimate(now: number): TempoEstimate | null {
     while (this.onsets.length && this.onsets[0].time < now - WINDOW_SEC) this.onsets.shift();
     const n = this.onsets.length;
+    if (this.last === null) this.settledAt = Infinity;
+    else if (this.settledAt === Infinity || Math.abs(this.last / this.settledBpm - 1) > 0.06) {
+      this.settledAt = now;
+      this.settledBpm = this.last;
+    } else this.settledBpm = this.last;
     if (n < 4) return null;
 
     const pts: Timed[] = this.onsets.map((o) => ({
@@ -98,7 +112,8 @@ export class TempoTracker {
     if (self <= 0) return null;
 
     const match = (period: number) => {
-      const sigma = 0.025 * period + 0.005;
+      // 사람이 치면 10~20ms는 어긋난다. 긴 간격이라고 더 봐주면 두 박이 한 박보다 잘 맞아 보인다
+      const sigma = 0.022 * period + 0.007;
       let sum = 0;
       for (let k = 0; k < gaps.length; k++) {
         const d = gaps[k] - period;
@@ -108,15 +123,39 @@ export class TempoTracker {
       return sum;
     };
 
+    // 그 간격만큼 앞에 짝이 있을 수 있었던 타격들의 무게. 막 치기 시작했을 때 긴 간격이 불리하지 않게 나눠 준다
+    const first = pts[0].t;
+    const support = (period: number) => {
+      let sum = 0;
+      for (let j = 0; j < n; j++) {
+        if (pts[j].t - period < first - 0.05) continue;
+        sum += pts[j].w * pts[j].w * Math.exp(-(now - pts[j].t) / RECENCY);
+      }
+      return sum;
+    };
+    /** 0..1쯤: 이 간격 뒤에도 같은 세기의 타격이 얼마나 꾸준히 있는지. 아직 알 수 없으면 null */
+    const repeat = (period: number) => {
+      const sup = support(period);
+      return sup < 0.25 * self ? null : match(period) / sup;
+    };
+    // 한 박이면 두 박이나 네 박(한 마디) 뒤에도 같은 모양이 되풀이된다. 그렇지 않은 간격은 깎는다:
+    // 한 박만 보면 싱코페이션한 킥끼리의 간격(3/4박, 1.5박 등)에 속는다
+    const comb = (period: number) => {
+      const one = repeat(period);
+      if (one === null) return 0;
+      const two = repeat(period * 2);
+      const four = repeat(period * 4);
+      const again = two === null && four === null ? 0.8 : Math.max(two ?? 0, four ?? 0);
+      return one * (0.35 + 0.65 * Math.min(1, again));
+    };
+
     let best = 0;
     let bestScore = 0;
     for (let bpm = MIN_BPM; bpm <= MAX_BPM; bpm *= STEP) {
-      let score: number;
-      if (this.hint) {
-        // 사용자가 정한 근처에서만: 그 박이 하이햇뿐이어도(2×) 두 박 간격이 맞으면 된다
-        score = (match(60 / bpm) + match(120 / bpm)) * gauss(Math.log2(bpm / this.hint), HINT_WIDTH);
-      } else {
-        score = match(60 / bpm) * gauss(Math.log2(bpm / PRIOR_BPM), PRIOR_WIDTH);
+      let score = comb(60 / bpm);
+      if (this.hint) score *= gauss(Math.log2(bpm / this.hint), HINT_WIDTH);
+      else {
+        score *= gauss(Math.log2(bpm / PRIOR_BPM), PRIOR_WIDTH);
         if (this.last) score *= 1 + 1.5 * gauss(Math.log2(bpm / this.last), 0.12);
       }
       if (score > bestScore) {
@@ -129,12 +168,20 @@ export class TempoTracker {
     if (!this.hint) {
       // 한 박·두 박·한 마디는 똑같이 잘 맞는다. 반으로 줄여도 거의 그대로 맞으면 그쪽이 한 박이다
       // (반 박에 하이햇만 있으면 약한 타격이라 덜 맞는다)
+      let faster = false;
       while (best * 2 <= MAX_BPM) {
         const near = this.last !== null && Math.abs(this.last / (best * 2) - 1) < 0.06;
-        const peak = bestNear(match, 30 / best);
-        if (peak.match < (near ? 0.65 : 0.8) * match(60 / best)) break;
+        const peak = bestNear((p) => repeat(p) ?? 0, 30 / best);
+        if (peak.match < (near ? 0.6 : 0.65) * (repeat(60 / best) ?? 0)) break;
+        // 이미 정한 박이 있으면 필인(잠깐 치는 16분음표)에 두 배로 넘어가지 않는다. 오래 이어질 때만 바꾼다
+        if (this.last !== null && Math.abs(this.last / best - 1) < 0.06 && now - this.settledAt > SETTLED_SEC) {
+          faster = true;
+          this.fasterSince ??= now;
+          if (now - this.fasterSince < FILL_SEC) break;
+        }
         best = 60 / peak.period;
       }
+      if (!faster) this.fasterSince = null;
     }
     const bestMatch = Math.max(match(60 / best), match(120 / best));
 
