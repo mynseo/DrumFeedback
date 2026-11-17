@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TempoEngine } from '../src/engine';
+import type { Feel } from '../src/tracker';
 const RATE = 44100;
 function rng(seed: number) { let s = seed >>> 0; return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
 type Drum = 'kick' | 'snare' | 'hat';
@@ -27,8 +28,8 @@ function play(bar: Ev[], beatsPerBar: number, bpm: number, seconds: number, jitt
     for (const [pos, drum, amp] of bar) hits.push({ time: 0.3 + (b * beatsPerBar + pos) * len + (rand() - 0.5) * 2 * jitter, drum, amp: amp ?? 1 });
   return hits.sort((a, b) => a.time - b.time);
 }
-function measure(hits: Hit[], seconds: number, target?: number) {
-  const audio = render(hits, seconds); const e = new TempoEngine(RATE); if (target) e.setTarget(target); const got: number[] = []; let n = 0; let next = 6;
+function measure(hits: Hit[], seconds: number, target?: number, feel?: Feel) {
+  const audio = render(hits, seconds); const e = new TempoEngine(RATE); if (target) e.setTarget(target); if (feel) e.setFeel(feel); const got: number[] = []; let n = 0; let next = 6;
   for (let i = 0; i < audio.length; i += 512) { e.push(audio.subarray(i, i + 512)); if (e.time >= next) { n++; next += 0.25; const s = e.state(); if (s.phase === 'locked') got.push(s.bpm!); } }
   got.sort((a, b) => a - b);
   return { locked: got.length / n, med: got[got.length >> 1] ?? NaN, lo: got[0] ?? NaN, hi: got[got.length - 1] ?? NaN };
@@ -88,4 +89,41 @@ describe('여러 리듬', () => {
       expect(Math.abs(r.med / bpm - 1), `${bpm} BPM → ${r.med.toFixed(1)}`).toBeLessThan(0.02);
     }
   });
+});
+
+/** 리듬만 고르면 (목표 템포 없이) 맞게 읽는다. [리듬 이름, 고를 리듬, 기대값 배수] */
+const BY_FEEL: [string, Feel, number][] = [
+  ['셔플', 'shuffle', 1],
+  ['셔플(하이햇 크게)', 'shuffle', 1],
+  ['하프타임 셔플', 'shuffle', 1],
+  ['12/8 슬로 블루스', 'triplet', 1],
+  ['스윙 재즈(라이드)', 'shuffle', 1],
+  ['바운스(스윙 16분)', 'bounce', 1],
+  ['펑크 16비트+고스트', 'sixteenth', 1],
+  ['포온더플로어', 'eighth', 1],
+  ['하프타임', 'eighth', 1],
+  ['더블타임(펑크록)', 'eighth', 1],
+  ['6/8', 'triplet', 1 / 3],
+  ['7/8', 'eighth', 1],
+  ['5/4', 'eighth', 1],
+  ['보사노바', 'eighth', 1],
+  ['원드롭(레게)', 'shuffle', 1],
+  ['4분음표만(패드 연습)', 'quarter', 1],
+  ['8분음표만', 'eighth', 1],
+  ['록+필인', 'eighth', 1],
+];
+
+describe('리듬을 고르면', () => {
+  for (const [name, feel, ratio] of BY_FEEL) {
+    const p = P[name];
+    it(`${name} (${feel}): 목표 템포 없이 맞게 읽는다`, () => {
+      for (const bpm of p.tempos) {
+        const want = bpm * ratio;
+        const r = measure(play(p.bar, p.beats, bpm, 24), 24, undefined, feel);
+        expect(Math.abs(r.med / want - 1), `${bpm} BPM → ${r.med.toFixed(1)} (기대 ${want.toFixed(1)}, 확정 ${(r.locked * 100).toFixed(0)}%)`).toBeLessThan(0.02);
+        // 원드롭은 한 마디에 센 타격이 하나뿐이라 확신이 늦게 선다 (자동·목표 템포여도 같다)
+        expect(r.locked, `${bpm} BPM 확정 비율`).toBeGreaterThan(name === '원드롭(레게)' ? 0.3 : 0.5);
+      }
+    });
+  }
 });

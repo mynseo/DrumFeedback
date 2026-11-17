@@ -36,10 +36,24 @@
           <button id="toggle" class="main" aria-label="측정 시작"><span id="toggle-label">시작</span></button>
           <button id="double" class="side" disabled title="절반으로 읽혔을 때 두 배로">2×</button>
         </div>
-        <label class="target">
-          목표 템포
-          <input id="target" type="number" inputmode="numeric" min="30" max="300" step="1" placeholder="자동" />
-        </label>
+        <div class="settings">
+          <label class="field">
+            <span>리듬</span>
+            <select id="feel" aria-label="리듬: 하이햇이나 라이드를 어떻게 나눠 치는지">
+              <option value="">자동</option>
+              <option value="eighth">8비트 · 하프타임</option>
+              <option value="sixteenth">16비트 · 펑크</option>
+              <option value="shuffle">셔플 · 스윙</option>
+              <option value="bounce">바운스 (16분 스윙)</option>
+              <option value="triplet">셋잇단 · 6/8 · 12/8</option>
+              <option value="quarter">4분음표만</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>목표 템포</span>
+            <input id="target" type="number" inputmode="numeric" min="30" max="300" step="1" placeholder="자동" />
+          </label>
+        </div>
         <a id="more" class="more" href="#report" hidden>결과 자세히 <span aria-hidden="true">↓</span></a>
       </footer>
       <div class="level" aria-hidden="true"><div id="level"></div></div>

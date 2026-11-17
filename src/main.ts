@@ -2,6 +2,7 @@ import './style.css';
 import { TempoEngine, type TempoState } from './engine';
 import { openMic, type Mic } from './mic';
 import { Session, type Report, type TempoSample } from './session';
+import { FEELS, type Feel } from './tracker';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const stage = $('stage');
@@ -15,6 +16,7 @@ const toggleLabel = $('toggle-label');
 const half = $<HTMLButtonElement>('half');
 const double = $<HTMLButtonElement>('double');
 const targetEl = $<HTMLInputElement>('target');
+const feelEl = $<HTMLSelectElement>('feel');
 const moreEl = $('more');
 const canvas = $<HTMLCanvasElement>('graph');
 const dock = document.querySelector<HTMLElement>('.dock')!;
@@ -29,6 +31,7 @@ const session = new Session();
 let mic: Mic | null = null;
 let engine: TempoEngine | null = null;
 let target: number | null = null;
+let feel: Feel | null = null;
 let wakeLock: { release(): Promise<void> } | null = null;
 /** 지금 연주의 기준 템포 (목표가 없을 때 처음 4초에서 잡는다) */
 let baseline: number | null = null;
@@ -44,6 +47,26 @@ const signed = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}`
 toggle.addEventListener('click', () => void (mic ? stop() : start()));
 half.addEventListener('click', () => rescale(0.5));
 double.addEventListener('click', () => rescale(2));
+// 고른 리듬은 다음에 열 때도 그대로 (저장이 안 되는 브라우저면 그냥 자동)
+try {
+  const saved = localStorage.getItem('feel');
+  if (saved && saved in FEELS) {
+    feel = saved as Feel;
+    feelEl.value = saved;
+  }
+} catch {
+  /* 저장소를 못 쓰면 자동 */
+}
+feelEl.addEventListener('change', () => {
+  feel = feelEl.value in FEELS ? (feelEl.value as Feel) : null;
+  engine?.setFeel(feel);
+  try {
+    if (feel) localStorage.setItem('feel', feel);
+    else localStorage.removeItem('feel');
+  } catch {
+    /* 저장 못 해도 이번에는 쓴다 */
+  }
+});
 targetEl.addEventListener('change', () => {
   const v = Number(targetEl.value);
   target = v >= 30 && v <= 300 ? v : null;
@@ -78,6 +101,7 @@ async function start() {
   }
   engine = new TempoEngine(mic.sampleRate);
   engine.setTarget(target);
+  engine.setFeel(feel);
   session.clear();
   baseline = null;
   report = null;

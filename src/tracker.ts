@@ -12,6 +12,7 @@ import type { Onset } from './onset';
  * - 흔한 빠르기(105 BPM 근처)를 조금 더 쳐 준다
  * - 한번 정한 빠르기 근처를 더 쳐 줘서 2배·절반 사이를 오락가락하지 않는다
  * - 사용자가 ½×·2×를 누르거나 목표 템포를 정하면 그 근처에서만 찾는다 (hint)
+ * - 사용자가 리듬(한 박을 어떻게 나눠 치는지)을 고르면, 한 박 안의 모양이 그 리듬과 맞는 간격을 고른다 (feel)
  */
 
 export const MIN_BPM = 30;
@@ -51,6 +52,85 @@ interface Timed {
   w: number;
 }
 
+/**
+ * 리듬: 한 박 안에서 타격이 오는 자리 (0..1). 하이햇·라이드처럼 꾸준히 치는 악기를 기준으로 고른다.
+ * 싱코페이션한 킥·스네어도 이 자리 중 하나에 떨어지므로 함께 맞는다.
+ */
+export const FEELS = {
+  quarter: [0],
+  eighth: [0, 1 / 2],
+  sixteenth: [0, 1 / 4, 1 / 2, 3 / 4],
+  shuffle: [0, 2 / 3],
+  bounce: [0, 1 / 3, 1 / 2, 5 / 6],
+  triplet: [0, 1 / 3, 2 / 3],
+} as const;
+export type Feel = keyof typeof FEELS;
+
+/** 리듬이 있을 때 비교하는 후보: 지금 찾은 간격의 이 배수들 */
+const FEEL_RATIOS = [1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4, 1, 4 / 3, 3 / 2, 2, 3, 4];
+/** 리듬 맞추기에 쓰는 최근 길이(초). 길면 빠르기가 조금만 바뀌어도 박 자리가 밀린다 */
+const FEEL_WINDOW = 5;
+
+/**
+ * 이 박 길이로 나눴을 때 타격들이 리듬의 자리에 얼마나 잘 맞는지 (0..1).
+ * - 맞음: 타격들이 그 자리 근처에 떨어지는 정도 (박을 너무 길게 잡으면 자리 밖 타격이 생긴다)
+ * - 채움: 박마다 그 자리들에 실제로 타격이 있는 정도 (박을 너무 짧게 잡으면 빈자리가 생긴다)
+ * 둘을 곱한다. 박의 시작점(위상)은 가장 잘 맞는 쪽으로 잡는다.
+ */
+export function feelFit(times: number[], weights: number[], period: number, slots: readonly number[]): number {
+  const n = times.length;
+  if (n < 3) return 0;
+  let minGap = 1;
+  for (let i = 0; i < slots.length; i++) {
+    const next = i + 1 < slots.length ? slots[i + 1] : slots[0] + 1;
+    minGap = Math.min(minGap, next - slots[i]);
+  }
+  const sigma = Math.min(0.016 + 0.012 * period, 0.22 * minGap * period) / period; // 박 단위
+  const phase = times.map((t) => t / period - Math.floor(t / period));
+  const near = (p: number, r: number) => {
+    let d = 1;
+    for (const s of slots) {
+      const x = (((p - r - s) % 1) + 1.5) % 1 - 0.5;
+      d = Math.min(d, Math.abs(x));
+    }
+    return Math.exp(-0.5 * (d / sigma) * (d / sigma));
+  };
+  let total = 0;
+  for (const w of weights) total += w;
+  let bestR = 0;
+  let precision = -1;
+  for (let i = 0; i < n; i++) {
+    for (const s of slots) {
+      const r = (((phase[i] - s) % 1) + 1) % 1;
+      let sum = 0;
+      for (let j = 0; j < n; j++) sum += weights[j] * near(phase[j], r);
+      if (sum > precision) {
+        precision = sum;
+        bestR = r;
+      }
+    }
+  }
+  precision /= total;
+
+  // 처음 타격부터 마지막 타격까지 꽉 찬 박들에서 자리마다 타격이 있었는지
+  const tol = 2.5 * sigma * period;
+  const from = Math.ceil(times[0] / period - bestR - 1e-6);
+  const to = Math.floor(times[n - 1] / period - bestR + 1e-6);
+  let slotsSeen = 0;
+  let filled = 0;
+  let j = 0;
+  for (let k = from; k < to; k++) {
+    for (const s of slots) {
+      const at = (k + bestR + s) * period;
+      while (j < n && times[j] < at - tol) j++;
+      slotsSeen++;
+      if (j < n && Math.abs(times[j] - at) <= tol) filled++;
+    }
+  }
+  const coverage = slotsSeen >= slots.length * 2 ? filled / slotsSeen : 0.5;
+  return precision * coverage;
+}
+
 const gauss = (x: number, width: number) => Math.exp(-0.5 * (x / width) * (x / width));
 
 export class TempoTracker {
@@ -58,6 +138,8 @@ export class TempoTracker {
   hint: number | null = null;
   /** 직전에 확정한 빠르기. 근처 후보를 더 쳐 준다 */
   last: number | null = null;
+  /** 사용자가 고른 리듬. null이면 자동 */
+  feel: Feel | null = null;
 
   private onsets: Onset[] = [];
   private fasterSince: number | null = null;
@@ -165,7 +247,31 @@ export class TempoTracker {
     }
     if (!best) return null;
 
-    if (!this.hint) {
+    if (this.feel && !this.hint) {
+      // 리듬을 알면 2배·절반뿐 아니라 3/4배·3/2배 같은 엇갈린 간격 중에서도 한 박을 고를 수 있다
+      const recentFrom = now - FEEL_WINDOW;
+      const times: number[] = [];
+      const ws: number[] = [];
+      for (const p of pts) {
+        if (p.t < recentFrom) continue;
+        times.push(p.t);
+        ws.push((0.4 + 0.6 * p.w) * Math.exp(-(now - p.t) / 3));
+      }
+      const slots = FEELS[this.feel];
+      let pick = best;
+      let pickScore = 0;
+      for (const r of FEEL_RATIOS) {
+        const bpm = best * r;
+        if (bpm < MIN_BPM || bpm > MAX_BPM) continue;
+        let score = feelFit(times, ws, 60 / bpm, slots);
+        if (this.last) score *= 1 + 0.25 * gauss(Math.log2(bpm / this.last), 0.06);
+        if (score > pickScore) {
+          pickScore = score;
+          pick = bpm;
+        }
+      }
+      if (pickScore > 0.25) best = pick;
+    } else if (!this.hint) {
       // 한 박·두 박·한 마디는 똑같이 잘 맞는다. 반으로 줄여도 거의 그대로 맞으면 그쪽이 한 박이다
       // (반 박에 하이햇만 있으면 약한 타격이라 덜 맞는다)
       let faster = false;

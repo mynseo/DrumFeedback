@@ -1,5 +1,5 @@
 import { OnsetDetector, type Onset } from './onset';
-import { MAX_BPM, MIN_BPM, TempoTracker } from './tracker';
+import { MAX_BPM, MIN_BPM, TempoTracker, type Feel } from './tracker';
 
 /**
  * 소리 → 지금 빠르기. 화면(마이크·그리기)과 떨어져 있어서 테스트에서 합성한 소리로 그대로 돌린다.
@@ -80,6 +80,13 @@ export class TempoEngine {
     this.target = bpm && bpm >= MIN_BPM && bpm <= MAX_BPM ? bpm : null;
     this.tracker.hint = this.target;
     this.tracker.last = null;
+  }
+
+  /** 리듬(한 박을 어떻게 나눠 치는지). null이면 자동 */
+  setFeel(feel: Feel | null) {
+    this.tracker.feel = feel;
+    this.tracker.last = null;
+    if (!this.target) this.tracker.hint = null;
   }
 
   /** 2배·절반으로 잘못 읽었을 때 바로잡는다. 바꾼 배수를 돌려준다 (못 바꾸면 1) */
