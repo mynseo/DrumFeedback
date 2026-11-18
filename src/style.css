@@ -177,7 +177,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 .take li time { color: var(--muted); }
 .tag.fast { color: var(--fast); }
 .tag.slow { color: var(--slow); }
-p.tag.ok { color: var(--ok); }
+.tag.ok { color: var(--ok); }
 .fine { margin-top: 28px; font-size: 12px; line-height: 1.7; color: var(--faint); text-align: center; }
 
 @media (min-width: 620px) {

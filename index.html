@@ -27,7 +27,7 @@
       <section class="center">
         <p id="eyebrow" class="eyebrow">BPM</p>
         <p id="bpm" class="bpm empty">—</p>
-        <p id="delta" class="delta">드럼을 치면 지금 빠르기를 알려 드려요</p>
+        <p id="delta" class="delta">드럼을 치세요</p>
       </section>
 
       <footer class="dock">
@@ -41,35 +41,35 @@
             <span>리듬</span>
             <select id="feel" aria-label="리듬: 하이햇이나 라이드를 어떻게 나눠 치는지">
               <option value="">자동</option>
-              <option value="eighth">8비트 · 하프타임</option>
-              <option value="sixteenth">16비트 · 펑크</option>
+              <option value="eighth">8비트</option>
+              <option value="sixteenth">16비트</option>
               <option value="shuffle">셔플 · 스윙</option>
-              <option value="bounce">바운스 (16분 스윙)</option>
-              <option value="triplet">셋잇단 · 6/8 · 12/8</option>
-              <option value="quarter">4분음표만</option>
+              <option value="bounce">바운스</option>
+              <option value="triplet">셋잇단 · 6/8</option>
+              <option value="quarter">4분음표</option>
             </select>
           </label>
           <label class="field">
-            <span>목표 템포</span>
+            <span>목표 BPM</span>
             <input id="target" type="number" inputmode="numeric" min="30" max="300" step="1" placeholder="자동" />
           </label>
         </div>
-        <p id="feel-hint" class="hint">합주할 땐 리듬을 골라 두면 다른 악기 소리에 덜 흔들려요</p>
-        <button id="file-btn" class="file-btn" type="button">녹음 파일로 확인하기</button>
+        <p id="feel-hint" class="hint">합주 땐 리듬을 고르세요</p>
+        <button id="file-btn" class="file-btn" type="button">파일로 확인</button>
         <input id="file" type="file" accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg,.flac" hidden />
-        <a id="more" class="more" href="#report" hidden>결과 자세히 <span aria-hidden="true">↓</span></a>
+        <a id="more" class="more" href="#report" hidden>자세히 <span aria-hidden="true">↓</span></a>
       </footer>
       <div class="level" aria-hidden="true"><div id="level"></div></div>
     </main>
 
     <section id="report" class="report" hidden>
       <div class="report-head">
-        <h2 id="report-title">이번 연습</h2>
+        <h2 id="report-title">결과</h2>
         <span id="report-time" class="muted"></span>
       </div>
       <div id="tiles" class="tiles"></div>
       <div id="takes"></div>
-      <p class="fine">소리는 이 기기 안에서만 분석하고 저장하거나 보내지 않아요.<br />숫자가 두 배나 절반으로 나오면 ½× · 2×로 바로잡으세요.</p>
+      <p class="fine">소리는 저장·전송하지 않아요<br />숫자가 2배·절반이면 ½× · 2×</p>
     </section>
     <script type="module" src="./src/main.ts"></script>
   </body>

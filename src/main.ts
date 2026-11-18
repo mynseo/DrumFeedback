@@ -100,9 +100,9 @@ document.addEventListener('visibilitychange', () => {
 async function start() {
   analysisId++;
   lastFile = null;
-  reportTitle.textContent = '이번 연습';
+  reportTitle.textContent = '결과';
   toggle.disabled = true;
-  statusEl.textContent = '마이크를 켜는 중';
+  statusEl.textContent = '연결 중';
   try {
     mic = await openMic(onSamples);
   } catch (e) {
@@ -110,12 +110,12 @@ async function start() {
     const missing = e instanceof DOMException && e.name === 'NotFoundError';
     statusEl.textContent = '마이크 꺼짐';
     deltaEl.textContent = denied
-      ? '브라우저에서 마이크 권한을 허용해 주세요'
+      ? '마이크 권한을 허용하세요'
       : missing
-        ? '마이크를 찾지 못했어요'
+        ? '마이크 없음'
         : e instanceof Error && !(e instanceof DOMException)
           ? e.message
-          : '마이크를 켜지 못했어요';
+          : '마이크 오류';
     delete deltaEl.dataset.kind;
     toggle.disabled = false;
     return;
@@ -131,8 +131,8 @@ async function start() {
   moreEl.hidden = true;
   eyebrowEl.textContent = 'BPM';
   stage.classList.add('running');
-  toggleLabel.textContent = '마침';
-  toggle.setAttribute('aria-label', '측정 마치고 결과 보기');
+  toggleLabel.textContent = '끝';
+  toggle.setAttribute('aria-label', '측정 끝');
   toggle.disabled = false;
   window.scrollTo({ top: 0 });
   void keepAwake();
@@ -184,7 +184,7 @@ const CHUNK = 1024;
 async function openFile(file: File) {
   const id = ++analysisId;
   fileBtn.disabled = true;
-  statusEl.textContent = '파일 여는 중';
+  statusEl.textContent = '여는 중';
   deltaEl.textContent = file.name;
   delete deltaEl.dataset.kind;
   try {
@@ -201,8 +201,8 @@ async function openFile(file: File) {
     await analyze(lastFile);
   } catch {
     if (id !== analysisId) return;
-    statusEl.textContent = '파일을 못 읽었어요';
-    deltaEl.textContent = 'mp3 · m4a · wav 같은 음악 파일을 골라 주세요';
+    statusEl.textContent = '오류';
+    deltaEl.textContent = 'mp3 · m4a · wav만 가능';
   } finally {
     if (id === analysisId) fileBtn.disabled = false;
   }
@@ -227,8 +227,8 @@ async function analyze(file: { name: string; samples: Float32Array; rate: number
   for (let i = 0; i < total; i += CHUNK) {
     onSamples(file.samples.subarray(i, Math.min(total, i + CHUNK)));
     if (performance.now() - last > 30) {
-      statusEl.textContent = `분석 중 ${Math.floor((i / total) * 100)}%`;
-      deltaEl.textContent = `${file.name} · ${clock(i / file.rate)} / ${clock(total / file.rate)}`;
+      statusEl.textContent = `분석 ${Math.floor((i / total) * 100)}%`;
+      deltaEl.textContent = file.name;
       await new Promise((r) => setTimeout(r, 0));
       if (id !== analysisId) return;
       last = performance.now();
@@ -236,7 +236,7 @@ async function analyze(file: { name: string; samples: Float32Array; rate: number
   }
   engine = null;
   showReport();
-  statusEl.textContent = '파일 분석 끝';
+  statusEl.textContent = '완료';
 }
 
 function updateBaseline() {
@@ -290,26 +290,25 @@ function renderMeter(s: TempoState) {
   setNumber(shown ? s.bpm : null);
   half.disabled = double.disabled = !shown;
   levelEl.style.width = `${Math.min(100, Math.sqrt(engine!.level) * 100)}%`;
-  statusEl.textContent = s.phase === 'locked' ? '듣는 중' : s.phase === 'hold' ? '잠깐 놓침' : s.phase === 'searching' ? '측정 중' : '기다리는 중';
+  statusEl.textContent = s.phase === 'locked' ? '듣는 중' : s.phase === 'hold' ? '놓침' : s.phase === 'searching' ? '찾는 중' : '대기';
 
   delete deltaEl.dataset.kind;
   if (!shown) {
-    deltaEl.textContent = s.phase === 'searching' ? '박을 찾고 있어요' : '드럼을 쳐 보세요';
+    deltaEl.textContent = s.phase === 'searching' ? '박 찾는 중' : '드럼을 치세요';
   } else if (baseline === null) {
-    deltaEl.textContent = '기준 템포를 잡는 중';
+    deltaEl.textContent = '기준 잡는 중';
   } else {
     const off = s.bpm! - baseline;
     const kind = Math.abs(off) <= baseline * ON_TEMPO ? 'ok' : off > 0 ? 'fast' : 'slow';
     deltaEl.dataset.kind = kind;
-    const word = kind === 'ok' ? '잘 맞아요' : kind === 'fast' ? `${signed(off)} 빨라요` : `${signed(off)} 느려요`;
-    deltaEl.textContent = `${target ? '목표' : '기준'} ${baseline.toFixed(target ? 0 : 1)} · ${word}`;
+    deltaEl.textContent = kind === 'ok' ? 'On tempo' : `${signed(off)} ${kind === 'fast' ? 'Fast' : 'Slow'}`;
   }
 }
 
 function showReport() {
   report = session.report(target);
   stage.dataset.phase = report ? 'locked' : 'off';
-  statusEl.textContent = '마침';
+  statusEl.textContent = '끝';
   delete deltaEl.dataset.kind;
   const tiles = $('tiles');
   const takes = $('takes');
@@ -318,7 +317,7 @@ function showReport() {
   if (!report) {
     eyebrowEl.textContent = 'BPM';
     setNumber(null);
-    deltaEl.textContent = '빠르기를 5초 넘게 재지 못했어요. 조금 더 길게 쳐 보세요';
+    deltaEl.textContent = '너무 짧아요';
     reportEl.hidden = true;
     moreEl.hidden = true;
     draw();
@@ -326,40 +325,36 @@ function showReport() {
   }
   eyebrowEl.textContent = '평균 BPM';
   setNumber(report.mean);
-  deltaEl.textContent = `안정성 ${report.score}점 · 흔들림 ±${report.wobblePct.toFixed(1)}%`;
+  deltaEl.textContent = `안정성 ${report.score} · ±${report.wobblePct.toFixed(1)}%`;
   reportEl.hidden = false;
   moreEl.hidden = false;
 
-  $('report-time').textContent = `잰 시간 ${clock(report.measured)}`;
+  $('report-time').textContent = clock(report.measured);
   const tile = (value: string, label: string) => {
     const d = el('div', 'tile');
     d.append(el('b', '', value), el('span', '', label));
     tiles.append(d);
   };
-  tile(report.mean.toFixed(1), '평균 BPM');
-  tile(`${report.min.toFixed(0)}–${report.max.toFixed(0)}`, '가장 느릴 때–빠를 때');
-  tile(`±${report.wobblePct.toFixed(1)}%`, '빠르기 흔들림');
-  tile(`${report.score}`, '안정성 점수');
+  tile(report.mean.toFixed(1), '평균');
+  tile(`${report.min.toFixed(0)}–${report.max.toFixed(0)}`, '범위');
+  tile(`±${report.wobblePct.toFixed(1)}%`, '흔들림');
+  tile(`${report.score}`, '안정성');
 
   report.takes.forEach((take, i) => {
     const box = el('div', 'take');
-    const title = report!.takes.length > 1 ? `연주 ${i + 1} · ` : '';
-    box.append(el('h3', '', `${title}${clock(take.start)}–${clock(take.end)} · 평균 ${take.mean.toFixed(1)} BPM`));
+    const title = report!.takes.length > 1 ? `#${i + 1} · ` : '';
+    box.append(el('h3', '', `${title}${clock(take.start)}–${clock(take.end)} · ${take.mean.toFixed(1)} BPM`));
     const drift = take.endBpm - take.startBpm;
-    const trend =
-      Math.abs(drift) < take.startBpm * ON_TEMPO
-        ? '처음과 끝의 빠르기가 거의 같아요'
-        : `끝으로 갈수록 ${Math.abs(drift).toFixed(1)} BPM ${drift > 0 ? '빨라졌어요' : '느려졌어요'}`;
-    box.append(el('p', '', `처음 ${take.startBpm.toFixed(1)} → 끝 ${take.endBpm.toFixed(1)} · ${trend}`));
-    const ref = `${target ? '목표' : '기준'} ${take.baseline.toFixed(1)} BPM`;
-    if (!take.sections.length) {
-      box.append(el('p', 'tag ok', `${ref}에서 크게 벗어난 구간이 없어요`));
-    } else {
-      box.append(el('p', '', `${ref}에서 벗어난 구간`));
+    const steady = Math.abs(drift) < take.startBpm * ON_TEMPO;
+    const flow = el('p');
+    flow.append(`${take.startBpm.toFixed(1)} → ${take.endBpm.toFixed(1)} `, el('span', `tag ${steady ? 'ok' : drift > 0 ? 'fast' : 'slow'}`, steady ? 'On tempo' : `${signed(drift)} ${drift > 0 ? 'Fast' : 'Slow'}`));
+    box.append(flow);
+    if (take.sections.length) {
+      box.append(el('p', '', `${target ? '목표' : '기준'} ${take.baseline.toFixed(1)}`));
       const ul = el('ul');
       for (const sec of take.sections) {
         const li = el('li');
-        li.append(el('time', '', `${clock(sec.start)}–${clock(sec.end)}`), el('span', `tag ${sec.kind}`, `${sec.kind === 'fast' ? '빨라짐' : '느려짐'} ${signed(sec.delta)} BPM`));
+        li.append(el('time', '', `${clock(sec.start)}–${clock(sec.end)}`), el('span', `tag ${sec.kind}`, `${signed(sec.delta)} ${sec.kind === 'fast' ? 'Fast' : 'Slow'}`));
         ul.append(li);
       }
       box.append(ul);

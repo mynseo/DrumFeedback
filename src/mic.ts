@@ -37,7 +37,7 @@ export interface Mic {
 
 export async function openMic(onSamples: (samples: Float32Array) => void): Promise<Mic> {
   if (!navigator.mediaDevices?.getUserMedia || typeof AudioWorkletNode === 'undefined') {
-    throw new Error('이 브라우저에서는 마이크를 쓸 수 없어요');
+    throw new Error('마이크 미지원 브라우저');
   }
   // 통화용 보정(울림 제거·소음 제거·자동 음량)은 드럼 타격을 뭉개므로 끈다
   const stream = await navigator.mediaDevices.getUserMedia({
