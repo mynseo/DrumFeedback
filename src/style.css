@@ -148,6 +148,10 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 1px solid 
 .field input::-webkit-inner-spin-button { -webkit-appearance: none; }
 .field select:focus, .field input:focus { outline: none; border-bottom-color: var(--ink); }
 .hint { margin-top: -8px; font-size: 11.5px; color: var(--faint); letter-spacing: 0.01em; text-align: center; }
+.file-btn { font-size: 12.5px; color: var(--muted); letter-spacing: 0.04em; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 4px; }
+.file-btn:hover { color: var(--ink); }
+.file-btn:disabled { opacity: 0.4; cursor: default; }
+.stage.running .file-btn { display: none; }
 .more { font-size: 12.5px; color: var(--ink); text-decoration: none; letter-spacing: 0.04em; opacity: 0.8; }
 .more span { display: inline-block; animation: nudge 1.6s ease-in-out infinite; }
 @keyframes nudge { 50% { transform: translateY(3px); } }

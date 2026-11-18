@@ -55,6 +55,8 @@
           </label>
         </div>
         <p id="feel-hint" class="hint">합주할 땐 리듬을 골라 두면 다른 악기 소리에 덜 흔들려요</p>
+        <button id="file-btn" class="file-btn" type="button">녹음 파일로 확인하기</button>
+        <input id="file" type="file" accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg,.flac" hidden />
         <a id="more" class="more" href="#report" hidden>결과 자세히 <span aria-hidden="true">↓</span></a>
       </footer>
       <div class="level" aria-hidden="true"><div id="level"></div></div>
@@ -62,7 +64,7 @@
 
     <section id="report" class="report" hidden>
       <div class="report-head">
-        <h2>이번 연습</h2>
+        <h2 id="report-title">이번 연습</h2>
         <span id="report-time" class="muted"></span>
       </div>
       <div id="tiles" class="tiles"></div>

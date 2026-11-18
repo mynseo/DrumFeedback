@@ -22,6 +22,9 @@ const moreEl = $('more');
 const canvas = $<HTMLCanvasElement>('graph');
 const dock = document.querySelector<HTMLElement>('.dock')!;
 const reportEl = $('report');
+const reportTitle = $('report-title');
+const fileBtn = $<HTMLButtonElement>('file-btn');
+const fileEl = $<HTMLInputElement>('file');
 
 /** 실시간 그래프에서 맨 위까지 보이는 길이(초) */
 const LIVE_SPAN = 40;
@@ -41,6 +44,10 @@ let report: Report | null = null;
 let hitAt = -Infinity;
 /** 그래프 가로 폭이 나타내는 범위(기준 대비 비율). 값이 벗어나면 천천히 넓어진다 */
 let range = 0.08;
+/** 마지막으로 분석한 녹음 파일 (리듬·목표 템포를 바꾸면 다시 분석한다) */
+let lastFile: { name: string; samples: Float32Array; rate: number } | null = null;
+/** 파일 분석 중이면 그 번호 (새로 시작하면 이전 분석은 멈춘다) */
+let analysisId = 0;
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const signed = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}`;
@@ -62,6 +69,7 @@ feelEl.addEventListener('change', () => {
   feel = feelEl.value in FEELS ? (feelEl.value as Feel) : null;
   feelHint.hidden = feel !== null;
   engine?.setFeel(feel);
+  if (!mic && lastFile) void analyze(lastFile);
   try {
     if (feel) localStorage.setItem('feel', feel);
     else localStorage.removeItem('feel');
@@ -75,7 +83,14 @@ targetEl.addEventListener('change', () => {
   target = v >= 30 && v <= 300 ? v : null;
   if (!target) targetEl.value = '';
   engine?.setTarget(target);
-  if (!mic && session.samples.length) showReport();
+  if (!mic && lastFile) void analyze(lastFile);
+  else if (!mic && session.samples.length) showReport();
+});
+fileBtn.addEventListener('click', () => fileEl.click());
+fileEl.addEventListener('change', () => {
+  const file = fileEl.files?.[0];
+  fileEl.value = '';
+  if (file) void openFile(file);
 });
 window.addEventListener('resize', () => draw());
 document.addEventListener('visibilitychange', () => {
@@ -83,6 +98,9 @@ document.addEventListener('visibilitychange', () => {
 });
 
 async function start() {
+  analysisId++;
+  lastFile = null;
+  reportTitle.textContent = '이번 연습';
   toggle.disabled = true;
   statusEl.textContent = '마이크를 켜는 중';
   try {
@@ -154,6 +172,71 @@ function onSamples(samples: Float32Array) {
     session.add(s.time, s.bpm);
     if (session.samples.length !== before) updateBaseline();
   }
+}
+
+// ---- 녹음 파일 ----
+// 마이크와 같은 엔진에 파일 소리를 차례로 넣는다. 화면이 멈추지 않게 조금씩 나눠서 돌린다
+
+/** 분석에 쓰는 샘플레이트 (휴대폰 마이크와 같은 값) */
+const FILE_RATE = 44100;
+const CHUNK = 1024;
+
+async function openFile(file: File) {
+  const id = ++analysisId;
+  fileBtn.disabled = true;
+  statusEl.textContent = '파일 여는 중';
+  deltaEl.textContent = file.name;
+  delete deltaEl.dataset.kind;
+  try {
+    const data = await file.arrayBuffer();
+    // 디코딩하면서 FILE_RATE로 바꾼다. 여러 채널은 평균해서 하나로
+    const decoded = await new OfflineAudioContext(1, 1, FILE_RATE).decodeAudioData(data);
+    const samples = new Float32Array(decoded.length);
+    for (let c = 0; c < decoded.numberOfChannels; c++) {
+      const ch = decoded.getChannelData(c);
+      for (let i = 0; i < ch.length; i++) samples[i] += ch[i] / decoded.numberOfChannels;
+    }
+    if (id !== analysisId) return;
+    lastFile = { name: file.name, samples, rate: decoded.sampleRate };
+    await analyze(lastFile);
+  } catch {
+    if (id !== analysisId) return;
+    statusEl.textContent = '파일을 못 읽었어요';
+    deltaEl.textContent = 'mp3 · m4a · wav 같은 음악 파일을 골라 주세요';
+  } finally {
+    if (id === analysisId) fileBtn.disabled = false;
+  }
+}
+
+async function analyze(file: { name: string; samples: Float32Array; rate: number }) {
+  const id = ++analysisId;
+  engine = new TempoEngine(file.rate);
+  engine.setTarget(target);
+  engine.setFeel(feel);
+  session.clear();
+  baseline = null;
+  report = null;
+  reportEl.hidden = true;
+  moreEl.hidden = true;
+  reportTitle.textContent = file.name;
+  eyebrowEl.textContent = 'BPM';
+  setNumber(null);
+  stage.dataset.phase = 'searching';
+  const total = file.samples.length;
+  let last = performance.now();
+  for (let i = 0; i < total; i += CHUNK) {
+    onSamples(file.samples.subarray(i, Math.min(total, i + CHUNK)));
+    if (performance.now() - last > 30) {
+      statusEl.textContent = `분석 중 ${Math.floor((i / total) * 100)}%`;
+      deltaEl.textContent = `${file.name} · ${clock(i / file.rate)} / ${clock(total / file.rate)}`;
+      await new Promise((r) => setTimeout(r, 0));
+      if (id !== analysisId) return;
+      last = performance.now();
+    }
+  }
+  engine = null;
+  showReport();
+  statusEl.textContent = '파일 분석 끝';
 }
 
 function updateBaseline() {
