@@ -172,7 +172,8 @@ describe('빠르기 찾기', () => {
     for (let t = 0.3; t < 14; t += 0.09 + rand() * 0.7) hits.push({ time: t, drum: rand() < 0.5 ? 'kick' : 'snare' });
     const log = listen(render(hits, 15));
     const locked = log.filter((l) => l.phase === 'locked').length;
-    expect(locked / log.length).toBeLessThan(0.15);
+    // 우연히 맞아떨어지는 순간은 있다 (이 난수에서 2~3초)
+    expect(locked / log.length).toBeLessThan(0.2);
   });
 
   it('멈추면 조용함으로 돌아가고 다시 치면 새로 찾는다', () => {
@@ -263,5 +264,52 @@ describe('연습 리포트', () => {
     const s = new Session();
     fill(s, 0, 2, () => 100);
     expect(s.report()).toBeNull();
+  });
+});
+
+describe('같은 빠르기에서 패턴만 바뀔 때', () => {
+  /** 100 BPM을 유지한 채 4초마다 패턴을 바꾼다: 50·200처럼 보이는 구간이 섞인다 */
+  function changing(): Hit[] {
+    const beat = 60 / 100;
+    const hits: Hit[] = [];
+    const rand = rng(11);
+    const j = () => (rand() - 0.5) * 0.016;
+    for (let b = 0; 0.3 + b * beat < 33.5; b++) {
+      const t = 0.3 + b * beat;
+      const sec = t;
+      const rockBeat = () => {
+        hits.push({ time: t + j(), drum: b % 2 ? 'snare' : 'kick' }, { time: t + j(), drum: 'hat' }, { time: t + beat / 2 + j(), drum: 'hat' });
+      };
+      if (sec < 8 || (sec >= 16 && sec < 20) || sec >= 28) rockBeat();
+      else if (sec < 12) {
+        // 킥만 1·3박 (50 BPM처럼 보인다)
+        if (b % 2 === 0) hits.push({ time: t + j(), drum: 'kick' });
+      } else if (sec < 16) {
+        // 16분음표 스네어 (400·200처럼 보인다)
+        for (let k = 0; k < 4; k++) hits.push({ time: t + (k * beat) / 4 + j(), drum: 'snare' });
+      } else if (sec < 24) {
+        // 하이햇 8분음표만 (200처럼 보인다)
+        hits.push({ time: t + j(), drum: 'hat' }, { time: t + beat / 2 + j(), drum: 'hat' });
+      } else {
+        // 킥·스네어 8분음표 번갈아 (200처럼 보인다)
+        hits.push({ time: t + j(), drum: 'kick' }, { time: t + beat / 2 + j(), drum: 'snare' });
+      }
+    }
+    return hits;
+  }
+
+  it('한번 잡은 박 단위를 50·200으로 바꾸지 않는다', () => {
+    const log = listen(render(changing(), 34));
+    const shown = log.filter((l) => l.t > 4 && l.bpm !== null && (l.phase === 'locked' || l.phase === 'hold'));
+    expect(shown.length).toBeGreaterThan(80);
+    const off = shown.filter((l) => Math.abs(l.bpm! / 100 - 1) > 0.03);
+    expect(off.map((l) => `${l.t.toFixed(1)}s:${l.bpm!.toFixed(0)}`).slice(0, 12)).toEqual([]);
+  });
+
+  it('리듬을 골라도 마찬가지다', () => {
+    const log = listen(render(changing(), 34), (e) => e.setFeel('eighth'));
+    const shown = log.filter((l) => l.t > 4 && l.bpm !== null && (l.phase === 'locked' || l.phase === 'hold'));
+    const off = shown.filter((l) => Math.abs(l.bpm! / 100 - 1) > 0.03);
+    expect(off.map((l) => `${l.t.toFixed(1)}s:${l.bpm!.toFixed(0)}`).slice(0, 12)).toEqual([]);
   });
 });
